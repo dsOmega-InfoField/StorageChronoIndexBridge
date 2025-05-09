@@ -1,10 +1,11 @@
 [project]
-name = "$project-name"
+name = "InfoField__StorageChronoIndexBridge"
 version = "0.1.0"
-description = "$project-description"
+description = "Establishing bridge between ChronoIndex and Storage layer"
 authors = ["DeadlySquad13 <46250621+DeadlySquad13@users.noreply.github.com>"]
-channels = ["pytorch", "nvidia", "conda-forge"]
+channels = ["conda-forge"]
 platforms = ["linux-64", "osx-64", "osx-arm64"]
+preview = ["pixi-build"]
 
 [tasks]
 #   `break-system-packages` option is set to mute ArchLinux notifications that we
@@ -12,18 +13,16 @@ platforms = ["linux-64", "osx-64", "osx-arm64"]
 # are recognized as global).
 postinstall = "pip install --no-build-isolation --no-deps --disable-pip-version-check --break-system-packages -e ."
 build = "echo test"
+# symlink-manager = "python src/symlink_manager/main.py"
+start = "symlink-manager"
 
 [dependencies]
 python = ">=3.8"
-numpy = "==1.26.4"
-gym = ">=0.26.1,<0.27"
-gym-box2d = ">=0.26.1,<0.27"
-matplotlib = ">=3.8.4,<3.9"
-tqdm = ">=4.66.2,<4.67"
+plyvel = ">=1.5.1,<2"
 
 [feature.test]
 tasks = { test = "pytest" }
-pypi-dependencies = { pull-requests-analyzer = { path = "./", editable = true }, pytest = "==6.2.5", pytest-cov = "==2.12.1" }
+pypi-dependencies = { InfoField__StorageChronoIndexBridge = { path = "./", editable = true }, pytest = "==6.2.5", pytest-cov = "==2.12.1" }
 
 [feature.lint.tasks]
 lint-check = "flake8 src"
@@ -45,39 +44,21 @@ isort = "==5.13.2"
 
 [feature.pre-commit]
 tasks = { pre-commit-check = "pre-commit run --all-files" }
-pypi-dependencies = { pull-requests-analyzer = { path = "./", editable = true }, pre-commit = "==3.7.0" }
-
-[feature.quarto.tasks]
-preview-docs = "quarto preview docs"
-build-docs = "quarto render docs"
-
-preview-reports = "quarto preview reports"
-build-reports = "quarto render reports"
-build-reports-html = "quarto render reports --to html"
-build-reports-pdf = "quarto render reports --to pdf"
-
-[feature.quarto.dependencies]
-quarto = "1.4.550"
-
-[feature.jupyter.pypi-dependencies]
-notebook = "*"
-nbclassic = "*"
-jupyter-console = "*"
-
-[feature.jupyter-neovim.pypi-dependencies]
-jupynium = "*"
-
-[feature.deep-learning.dependencies]
-pytorch = ">=2.2.2,<2.4"
-
-[feature.deep-learning.target.linux-64.dependencies]
-pytorch = ">=2.3.0,<2.4"
-pytorch-cuda = "12.1.*"
+pypi-dependencies = { InfoField__StorageChronoIndexBridge = { path = "./", editable = true }, pre-commit = "==3.7.0" }
 
 [environments]
 default = []
 dev = ["test", "lint", "pre-commit"]
-dev-ju = ["test", "lint", "jupyter", "pre-commit"]
-dev-ju-nvim = ["test", "lint", "jupyter", "jupyter-neovim", "pre-commit"]
-quarto = ["quarto", "jupyter"]
-dev-quarto = ["test", "lint", "quarto", "jupyter", "pre-commit"]
+
+[pypi-dependencies]
+pathspec = ">=0.12.1, <0.13"
+
+[package]
+name = "InfoField__StorageChronoIndexBridge"
+version = "0.1.0"
+
+[package.build]
+backend = { name = "pixi-build-python", version = "0.1.*" }
+
+[package.host-dependencies]
+hatchling = "==1.26.3"
