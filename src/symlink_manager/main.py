@@ -40,13 +40,13 @@ class SymlinkManager:
 
     def _is_ignored(self, path):
         """Check if a path matches .gitignore patterns."""
-        # Convert to relative path for matching
+        # Convert to relative path for matching.
         try:
             rel_path = str(Path(path).relative_to(self.repo_path))
         except ValueError:
             return True  # Ignore paths outside repository
 
-        # Check against gitignore patterns
+        # Check against gitignore patterns.
         return self.gitignore_spec.match_file(rel_path)
 
     def _load_translation_rules(self):
@@ -274,17 +274,15 @@ class SymlinkManager:
         db_keys = {key.decode() for key, _ in self.db}
 
         for root, dirs, files in os.walk(self.repo_path, topdown=True):
-            # Remove ignored directories from walk
-            dirs[:] = [d for d in dirs if not self._is_ignored(Path(root) / d)]
+            # Iterate over both dirs and files.
+            paths = [Path(root) / path for path in files + dirs]
+            # Remove ignored paths from walk.
+            relevant_paths = [path for path in paths if not self._is_ignored(path)]
 
-            for file in files:
-                full_path = Path(root) / file
-                if self._is_ignored(full_path):
-                    continue
-
-                if full_path.is_symlink():
+            for path in relevant_paths:
+                if path.is_symlink():
                     try:
-                        rel_path = str(full_path.relative_to(self.repo_path))
+                        rel_path = str(path.relative_to(self.repo_path))
                         if rel_path not in db_keys:
                             untracked.append(rel_path)
                     except ValueError:
@@ -315,13 +313,13 @@ class SymlinkManager:
 
     def full_sync(self):
         """Complete synchronization between filesystem and database."""
-        # First add any untracked symlinks
+        # First add any untracked symlinks.
         added = self.add_untracked_symlinks()
 
         # Then update existing symlinks for current platform
         updated = self.process_all()
 
-        # Finally check for deleted symlinks
+        # Finally check for deleted symlinks.
         deleted = self.cleanup_deleted_symlinks()
 
         return {"added": added, "updated": updated, "deleted": deleted}
