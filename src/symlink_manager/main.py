@@ -2,13 +2,36 @@ import json
 import os
 import platform
 from pathlib import Path
+from types import UnionType
+from typing import Literal
 
 import pathspec
 import plyvel
 
+# REFACTOR: Duplicating
+# ~/.bookmarks/shared-scripts/InfoField__ChronoIndex/info_field_coonoIndex/info_field_consts.py
+CURRENT_CHRONO_INDEX_PATH = "/home/ds13/.bookmarks/ChronoIndex/Current"
+
+
+def update_fs_symlink(link_path: str | Path, new_link_path: str | Path):
+    os.remove(link_path)
+    os.symlink(new_link_path, link_path)
+
+
+type TargetOsName = Literal["windows", "linux", "darwin"]
+# Result of `platform.system().lower()`. Can be "java", for instance.
+type OsName = UnionType[TargetOsName, str]
+
+
+class Symlink:
+    original_target: str
+    translations: dict[OsName, str]
+
 
 class SymlinkManager:
     def __init__(self, repo_path, db_path=".symlinks.ldb"):
+        # REFACTOR: Actually cwd of the script. I think it's ok to name it as
+        # cwd.
         self.repo_path = Path(repo_path).absolute()
         self.db_path = db_path
         self.db = plyvel.DB(db_path, create_if_missing=True)
@@ -81,7 +104,7 @@ class SymlinkManager:
             raise ValueError(f"Path {path} is not within repository {self.repo_path}")
 
     # CRUD Operations
-    def add_symlink(self, link_path, target_path, force=False):
+    def add_symlink(self, target_path, link_path, force=False):
         """
         Add a new symlink to the repository and database.
 
@@ -102,6 +125,10 @@ class SymlinkManager:
                 raise FileExistsError(f"Path {link_path} already exists")
             if not link_path.is_symlink():
                 raise ValueError(f"Path {link_path} exists but is not a symlink")
+
+        target_path = Path(target_path)
+        if not target_path.exists():
+            raise FileNotFoundError(f"Path {target_path} doesn't exist")
 
         # Create parent directories if needed
         link_path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,7 +241,97 @@ class SymlinkManager:
 
         return json.loads(data.decode())
 
-    # Translation methods (from previous implementation)
+        # def add_to_chrono_index(self, file_path):
+        """
+        Add a file to the ChronoIndex.
+
+        Args:
+            file: Path to a file that will be added to ChronoIndex
+        Returns:
+            chrono_index_id: identifier of the file after it was added to ChronoIndex
+        """
+        file_path = Path(file_path)
+
+        if not file_path.exists():
+            raise FileNotFoundError(f"Path {file_path} doesn't exist")
+
+        # Store in database
+        self.db.put(
+            rel_path.encode(),
+            json.dumps(
+                {
+                    "original_target": str(target_path),
+                    "translations": {
+                        self.current_os: str(
+                            target_path
+                        )  # Store original as first translation
+                    },
+                }
+            ).encode(),
+        )
+
+        return rel_path
+
+    def add_to_view(self, file, view_path):
+        """
+        Add a file to the view.
+
+        Args:
+            file: Path to a file that will be added to ChronoIndex and linked to the view
+            view_path: Path of the view
+        """
+        pass
+
+    # def add_view(self, files, view_name):
+    #     """
+    #     Add a view of the specified files.
+
+    #     Args:
+    #         files: Paths where symlink should be created (relative or absolute)
+    #         target_path: Target path the symlink should point to
+    #         force: Overwrite existing symlink if True
+    #     """
+    #     link_path = Path(link_path)
+    #     if not link_path.is_absolute():
+    #         link_path = self.repo_path / link_path
+
+    #     rel_path = self._get_relative_path(link_path)
+
+    #     # Check if symlink already exists
+    #     if link_path.exists():
+    #         if not force:
+    #             raise FileExistsError(f"Path {link_path} already exists")
+    #         if not link_path.is_symlink():
+    #             raise ValueError(f"Path {link_path} exists but is not a symlink")
+
+    #     target_path = Path(target_path)
+    #     if not target_path.exists():
+    #         raise FileNotFoundError(f"Path {target_path} doesn't exist")
+
+    #     # Create parent directories if needed
+    #     link_path.parent.mkdir(parents=True, exist_ok=True)
+
+    #     # Create the symlink
+    #     os.symlink(target_path, link_path)
+
+    #     # Store in database
+    #     self.db.put(
+    #         rel_path.encode(),
+    #         json.dumps(
+    #             {
+    #                 "original_target": str(target_path),
+    #                 "translations": {
+    #                     self.current_os: str(
+    #                         target_path
+    #                     )  # Store original as first translation
+    #                 },
+    #             }
+    #         ).encode(),
+    #     )
+
+    #     return rel_path
+
+    # Translation methods.
     def translate_path(self, target_path):
         """Apply translation rules based on current OS."""
         for src, dest in self.translation_rules.get(self.current_os, {}).items():
@@ -222,31 +339,109 @@ class SymlinkManager:
                 return str(target_path).replace(src, dest)
         return str(target_path)
 
-    def update_symlink(self, rel_path):
-        """Update a single symlink based on DB record."""
-        data = self.db.get(rel_path.encode())
+    def extract_value_for_current_translation(self, record: Symlink):
+        """
+        Get from record a translation for current os or if doesn't exist
+        translate path from original_target.
+
+        Args:
+            record(Symlink) from db
+        Return:
+            [boolean, translated_path] - indicator if translation for current os exists and a translated path.
+        """
+        translated_path = record["translations"].get(self.current_os)
+        if translated_path:
+            return [True, translated_path]
+
+        # We haven't yet translated this symlink for current os.
+        translated_path = self.translate_path(record["original_target"])
+        record["translations"][self.current_os] = translated_path
+
+        return [False, translated_path]
+
+    def get_value_for_current_translation_from_db(self, key: str) -> Path:
+        """
+        Get from db a translation for current os. If translation doesn't exist -
+        translate path from original_target and update db.
+        If record doesn't exist at all, throws error.
+
+        Args:
+            key - to the record in db
+        Return:
+            translated_path - a translated path.
+        """
+        data = self.db.get(key.encode())
         if not data:
-            return False
+            # QUESTION: Maybe db already throws better error?
+            raise KeyError(f"Entry by the key: {key} doesn't exist in db")
 
         record = json.loads(data.decode())
+
+        [was_already_translated, translated_path] = (
+            self.extract_value_for_current_translation(record)
+        )
+
+        if not was_already_translated:
+            self.db.put(key.encode(), json.dumps(record).encode())
+
+        return translated_path
+
+    def update_symlink(self, rel_path):
+        """
+        Update a single symlink based on DB record.
+
+        Returns:
+            True if symlink was added.
+            False is symlink already existed or failed to be added.
+        """
         link_path = self.repo_path / rel_path
 
         if not link_path.exists():
             return False
 
+        translated_path = None
+
+        try:
+            translated_path = self.get_value_for_current_translation_from_db(rel_path)
+        except KeyError:
+            return False
+
         current_target = os.readlink(link_path)
 
-        # Check if translation exists for this OS
-        translated = record["translations"].get(self.current_os)
-        if not translated:
-            translated = self.translate_path(record["original_target"])
-            record["translations"][self.current_os] = translated
-            self.db.put(rel_path.encode(), json.dumps(record).encode())
-
-        if current_target != translated:
-            os.remove(link_path)
-            os.symlink(translated, link_path)
+        if current_target != translated_path:
+            update_fs_symlink(link_path, translated_path)
             return True
+
+        return False
+
+    def add_tracked_symlink(self, rel_path):
+        """
+        Add a single symlink based on DB record.
+
+        Returns:
+            True if symlink was added.
+            False is symlink failed to be added.
+        """
+        link_path = self.repo_path / rel_path
+
+        translated_path = None
+
+        try:
+            translated_path = self.get_value_for_current_translation_from_db(rel_path)
+        except KeyError:
+            return False
+
+        current_target = None
+        try:
+            current_target = os.readlink(link_path)
+        except FileNotFoundError:
+            os.symlink(translated_path, link_path)
+            return True
+
+        if current_target != translated_path:
+            update_fs_symlink(link_path, translated_path)
+            return True
+
         return False
 
     def process_all(self):
@@ -296,7 +491,6 @@ class SymlinkManager:
         for rel_path in self.scan_for_untracked_symlinks():
             full_path = self.repo_path / rel_path
             target = os.readlink(full_path)
-            print(rel_path, target)
 
             self.db.put(
                 rel_path.encode(),
@@ -311,8 +505,16 @@ class SymlinkManager:
 
         return added
 
-    def full_sync(self):
-        """Complete synchronization between filesystem and database."""
+    def add_tracked_symlinks(self):
+        """Add all tracked in the database symlinks to filesystem."""
+        values = [self.add_tracked_symlink(key.decode()) for key, value in self.db]
+
+        # Number of True (newly added items).
+        return len(list(filter(bool, values)))
+
+    # PERF: All three methods are loops, usually over the same values.
+    def push(self):
+        """Update data in database from filesystem (push from fs -> db)."""
         # First add any untracked symlinks.
         added = self.add_untracked_symlinks()
 
@@ -323,6 +525,19 @@ class SymlinkManager:
         deleted = self.cleanup_deleted_symlinks()
 
         return {"added": added, "updated": updated, "deleted": deleted}
+
+    def pull(self):
+        """Pull data from database to filesystem (pull from db -> fs)."""
+        # First add any untracked symlinks.
+        added = self.add_tracked_symlinks()
+
+        # Then update existing symlinks for current platform
+        # updated = self.process_all()
+
+        # Finally check for deleted symlinks.
+        # deleted = self.cleanup_deleted_symlinks()
+
+        return {"added": added, "updated": 0, "deleted": 0}
 
     def cleanup_deleted_symlinks(self):
         """Remove database entries for symlinks that no longer exist."""
@@ -358,10 +573,10 @@ if __name__ == "__main__":
 
     # Add command
     add_parser = subparsers.add_parser("add", help="Add a new symlink")
-    add_parser.add_argument("link_path", help="Path to create symlink at")
     add_parser.add_argument(
         "target_path", help="Target path the symlink should point to"
     )
+    add_parser.add_argument("link_path", help="Path to create symlink at")
     add_parser.add_argument(
         "--force", action="store_true", help="Overwrite existing symlink"
     )
@@ -382,18 +597,19 @@ if __name__ == "__main__":
     info_parser = subparsers.add_parser("info", help="Get info about a symlink")
     info_parser.add_argument("link_path", help="Path to symlink")
 
-    # Add new commands
+    # Sync commands.
     scan_parser = subparsers.add_parser("scan", help="Scan for untracked symlinks")
-    fullsync_parser = subparsers.add_parser(
-        "fullsync", help="Complete sync between filesystem and DB"
-    )
+
+    push_parser = subparsers.add_parser("push", help="Sync data from filesystem to DB")
+
+    pull_parser = subparsers.add_parser("pull", help="Sync data from DB to filesystem")
 
     args = parser.parse_args()
 
     with SymlinkManager(os.getcwd()) as manager:
         if args.command == "add":
             print(
-                f"Added symlink: {manager.add_symlink(args.link_path, args.target_path, args.force)}"
+                f"Added symlink: {manager.add_symlink(args.target_path, args.link_path, args.force)}"
             )
         elif args.command == "remove":
             print(f"Removed symlink: {manager.remove_symlink(args.link_path)}")
@@ -417,11 +633,19 @@ if __name__ == "__main__":
             print(f"Updated {updated} symlinks")
         elif args.command == "scan":
             untracked = manager.scan_for_untracked_symlinks()
-            print("Untracked symlinks:")
-            for symlink in untracked:
-                print(f" - {symlink}")
-        elif args.command == "fullsync":
-            result = manager.full_sync()
+            if not untracked:
+                print("There's no untracked symlinks")
+            else:
+                print("Untracked symlinks:")
+                for symlink in untracked:
+                    print(f" - {symlink}")
+        elif args.command == "push":
+            result = manager.push()
             print(
-                f"Sync complete: {result['added']} added, {result['updated']} updated, {result['deleted']} deleted"
+                f"Push to DB completed: {result['added']} added, {result['updated']} updated, {result['deleted']} deleted"
+            )
+        elif args.command == "pull":
+            result = manager.pull()
+            print(
+                f"Pull to filesystem completed: {result['added']} added, {result['updated']} updated, {result['deleted']} deleted"
             )
