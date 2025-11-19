@@ -366,9 +366,11 @@ class SymlinkManager:
         If record doesn't exist at all, throws error.
 
         Args:
-            key - to the record in db
+            key - to the record in db.
         Return:
             translated_path - a translated path.
+        Throws:
+            KeyError - if entry by `key` doesn't exist in db.
         """
         data = self.db.get(key.encode())
         if not data:
@@ -414,36 +416,6 @@ class SymlinkManager:
 
         return False
 
-    def add_tracked_symlink(self, rel_path):
-        """
-        Add a single symlink based on DB record.
-
-        Returns:
-            True if symlink was added.
-            False is symlink failed to be added.
-        """
-        link_path = self.repo_path / rel_path
-
-        translated_path = None
-
-        try:
-            translated_path = self.get_value_for_current_translation_from_db(rel_path)
-        except KeyError:
-            return False
-
-        current_target = None
-        try:
-            current_target = os.readlink(link_path)
-        except FileNotFoundError:
-            os.symlink(translated_path, link_path)
-            return True
-
-        if current_target != translated_path:
-            update_fs_symlink(link_path, translated_path)
-            return True
-
-        return False
-
     def process_all(self):
         """Process all symlinks in database."""
         updated = 0
@@ -460,7 +432,7 @@ class SymlinkManager:
     def __enter__(self):
         return self
 
-    # Scan untracked symlinks methods.
+    # Scan untracked symlinks.
     def scan_for_untracked_symlinks(self):
         """Find symlinks in filesystem that aren't in the database.
         Respects .gitignore.
@@ -505,40 +477,6 @@ class SymlinkManager:
 
         return added
 
-    def add_tracked_symlinks(self):
-        """Add all tracked in the database symlinks to filesystem."""
-        values = [self.add_tracked_symlink(key.decode()) for key, value in self.db]
-
-        # Number of True (newly added items).
-        return len(list(filter(bool, values)))
-
-    # PERF: All three methods are loops, usually over the same values.
-    def push(self):
-        """Update data in database from filesystem (push from fs -> db)."""
-        # First add any untracked symlinks.
-        added = self.add_untracked_symlinks()
-
-        # Then update existing symlinks for current platform
-        updated = self.process_all()
-
-        # Finally check for deleted symlinks.
-        deleted = self.cleanup_deleted_symlinks()
-
-        return {"added": added, "updated": updated, "deleted": deleted}
-
-    def pull(self):
-        """Pull data from database to filesystem (pull from db -> fs)."""
-        # First add any untracked symlinks.
-        added = self.add_tracked_symlinks()
-
-        # Then update existing symlinks for current platform
-        # updated = self.process_all()
-
-        # Finally check for deleted symlinks.
-        # deleted = self.cleanup_deleted_symlinks()
-
-        return {"added": added, "updated": 0, "deleted": 0}
-
     def cleanup_deleted_symlinks(self):
         """Remove database entries for symlinks that no longer exist."""
         deleted = 0
@@ -557,6 +495,88 @@ class SymlinkManager:
             deleted += 1
 
         return deleted
+
+    # PERF: All three methods are loops, usually over the same values.
+    def push(self):
+        """Update data in database from filesystem (push from fs -> db)."""
+        # First add any untracked symlinks.
+        added = self.add_untracked_symlinks()
+
+        # Then update existing symlinks for current platform.
+        updated = self.process_all()
+
+        # Finally check for deleted symlinks.
+        deleted = self.cleanup_deleted_symlinks()
+
+        return {"added": added, "updated": updated, "deleted": deleted}
+
+    def add_tracked_symlink(self, rel_path):
+        """
+        Add a single symlink based on DB record.
+
+        Returns:
+            True if symlink was added.
+            False is symlink failed to be added.
+        """
+        link_path = self.repo_path / rel_path
+
+        translated_path = None
+
+        try:
+            translated_path = self.get_value_for_current_translation_from_db(rel_path)
+        except KeyError:
+            return False
+
+        current_target = None
+        try:
+            current_target = os.readlink(link_path)
+        except FileNotFoundError:
+            os.symlink(translated_path, link_path)
+            return True
+
+        if current_target != translated_path:
+            update_fs_symlink(link_path, translated_path)
+            return True
+
+        return False
+
+    def add_tracked_symlinks(self):
+        """Add all tracked in the database symlinks to filesystem."""
+        values = [self.add_tracked_symlink(key.decode()) for key, _ in self.db]
+
+        # Number of True's (newly added items).
+        return len(list(filter(bool, values)))
+
+    def cleanup_untracked_symlinks(self):
+        """Remove entities for symlinks that are not tracked inside database"""
+        deleted = 0
+        to_delete = []
+
+        for rel_path in self.scan_for_untracked_symlinks():
+            full_path = self.repo_path / rel_path
+            to_delete.append(full_path)
+
+        for path in to_delete:
+            # TODO: Test.
+            # os.remove(path)
+            print(path)
+            deleted += 1
+
+        return deleted
+
+    # PERF: All three methods are loops, usually over the same values.
+    def pull(self):
+        """Pull data from database to filesystem (pull from db -> fs)."""
+        # First ensure symlinks are tracked.
+        added = self.add_tracked_symlinks()
+
+        # Then update existing symlinks for current platform.
+        updated = self.process_all()
+
+        # Finally check for deleted symlinks.
+        deleted = self.cleanup_untracked_symlinks()
+
+        return {"added": added, "updated": updated, "deleted": deleted}
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
