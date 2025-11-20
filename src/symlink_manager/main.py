@@ -13,9 +13,25 @@ import plyvel
 CURRENT_CHRONO_INDEX_PATH = "/home/ds13/.bookmarks/ChronoIndex/Current"
 
 
-def update_fs_symlink(link_path: str | Path, new_link_path: str | Path):
+def update_fs_symlink(link_path: str | Path, new_link_path: str | Path, **symlink_kwargs):
     os.remove(link_path)
-    os.symlink(new_link_path, link_path)
+    os.symlink(new_link_path, link_path, **symlink_kwargs)
+
+
+def is_git_repo(path: Path):
+    git_dir = path / ".git"
+    return git_dir.is_dir()
+
+
+def find_repo_root(path):
+    """Find repository root from the path"""
+
+    if is_git_repo(path):
+        return path
+
+    for parent in Path(path).parents:
+        if is_git_repo(parent):
+            return parent
 
 
 type TargetOsName = Literal["windows", "linux", "darwin"]
@@ -29,17 +45,54 @@ class Symlink:
 
 
 class SymlinkManager:
-    def __init__(self, repo_path, db_path=".symlinks.ldb"):
-        # REFACTOR: Actually cwd of the script. I think it's ok to name it as
-        # cwd.
-        self.repo_path = Path(repo_path).absolute()
+    def __init__(
+        self,
+        # Returns already resolved path if we're in a symlinked directory.
+        cwd=os.getcwd(),
+        db_path=".symlinks.ldb",
+    ):
+    
+        self.cwd = Path(cwd).absolute()
+        # INFO: Currently all rules and .gitignores we get from root - we don't
+        # support potential extends and overrides.
+        self.repo_path = find_repo_root(self.cwd)
         self.db_path = db_path
         self.db = plyvel.DB(db_path, create_if_missing=True)
         self.current_os = platform.system().lower()
+        self.init_chrono_index()
 
         # Load translation rules from config file if exists
         self.translation_rules = self._load_translation_rules()
         self.gitignore_spec = self._load_gitignore_spec()
+
+    def init_chrono_index(self):
+        self.local_chrono_index = self.cwd / ".ChronoIndex"
+        self.local_chrono_index.mkdir(exist_ok=True)
+
+        # TODO: Get current year
+        year = "2025"
+        self.year_local_chrono_index = self.local_chrono_index / year
+        self.year_local_chrono_index.mkdir(exist_ok=True)
+
+        self.current_local_chrono_index = self.local_chrono_index / "Current"
+
+        year_local_chrono_index = None
+        try:
+            year_local_chrono_index = os.readlink(self.current_local_chrono_index)
+        except FileNotFoundError:
+            os.symlink(
+                self.year_local_chrono_index,
+                self.current_local_chrono_index,
+                target_is_directory=True
+            )
+            return
+
+        if year_local_chrono_index != self.year_local_chrono_index:
+            update_fs_symlink(
+                self.current_local_chrono_index,
+                self.year_local_chrono_index,
+                target_is_directory=True
+            )
 
     def _load_gitignore_spec(self):
         """Load .gitignore patterns from repository."""
@@ -50,7 +103,7 @@ class SymlinkManager:
             with open(gitignore_path, "r") as f:
                 patterns = f.readlines()
 
-        # Also check for .git/info/exclude
+        # Also check for user local gitignore: .git/info/exclude
         git_exclude_path = self.repo_path / ".git" / "info" / "exclude"
         if git_exclude_path.exists():
             with open(git_exclude_path, "r") as f:
@@ -115,7 +168,7 @@ class SymlinkManager:
         """
         link_path = Path(link_path)
         if not link_path.is_absolute():
-            link_path = self.repo_path / link_path
+            link_path = self.cwd / link_path
 
         rel_path = self._get_relative_path(link_path)
 
@@ -162,7 +215,7 @@ class SymlinkManager:
         """
         link_path = Path(link_path)
         if not link_path.is_absolute():
-            link_path = self.repo_path / link_path
+            link_path = self.cwd / link_path
 
         rel_path = self._get_relative_path(link_path)
 
@@ -187,7 +240,7 @@ class SymlinkManager:
         """
         link_path = Path(link_path)
         if not link_path.is_absolute():
-            link_path = self.repo_path / link_path
+            link_path = self.cwd / link_path
 
         rel_path = self._get_relative_path(link_path)
 
@@ -231,7 +284,7 @@ class SymlinkManager:
         """
         link_path = Path(link_path)
         if not link_path.is_absolute():
-            link_path = self.repo_path / link_path
+            link_path = self.cwd / link_path
 
         rel_path = self._get_relative_path(link_path)
         data = self.db.get(rel_path.encode())
@@ -241,7 +294,7 @@ class SymlinkManager:
 
         return json.loads(data.decode())
 
-        # def add_to_chrono_index(self, file_path):
+    def add_to_chrono_index(self, file_path):
         """
         Add a file to the ChronoIndex.
 
@@ -272,15 +325,15 @@ class SymlinkManager:
 
         return rel_path
 
-    def add_to_view(self, file, view_path):
-        """
-        Add a file to the view.
+    # def add_to_view(self, file, view_path):
+    #     """
+    #     Add a file to the view.
 
-        Args:
-            file: Path to a file that will be added to ChronoIndex and linked to the view
-            view_path: Path of the view
-        """
-        pass
+    #     Args:
+    #         file: Path to a file that will be added to ChronoIndex and linked to the view
+    #         view_path: Path of the view
+    #     """
+    #     pass
 
     # def add_view(self, files, view_name):
     #     """
@@ -396,7 +449,7 @@ class SymlinkManager:
             True if symlink was added.
             False is symlink already existed or failed to be added.
         """
-        link_path = self.repo_path / rel_path
+        link_path = self.cwd / rel_path
 
         if not link_path.exists():
             return False
@@ -440,8 +493,9 @@ class SymlinkManager:
         untracked = []
         db_keys = {key.decode() for key, _ in self.db}
 
-        for root, dirs, files in os.walk(self.repo_path, topdown=True):
+        for root, dirs, files in os.walk(self.cwd, topdown=True):
             # Iterate over both dirs and files.
+            # PERF: Doesn't it iterate same files twice?
             paths = [Path(root) / path for path in files + dirs]
             # Remove ignored paths from walk.
             relevant_paths = [path for path in paths if not self._is_ignored(path)]
@@ -449,7 +503,7 @@ class SymlinkManager:
             for path in relevant_paths:
                 if path.is_symlink():
                     try:
-                        rel_path = str(path.relative_to(self.repo_path))
+                        rel_path = str(path.relative_to(self.cwd))
                         if rel_path not in db_keys:
                             untracked.append(rel_path)
                     except ValueError:
@@ -461,7 +515,7 @@ class SymlinkManager:
         """Add all untracked symlinks to the database."""
         added = 0
         for rel_path in self.scan_for_untracked_symlinks():
-            full_path = self.repo_path / rel_path
+            full_path = self.cwd / rel_path
             target = os.readlink(full_path)
 
             self.db.put(
@@ -484,7 +538,7 @@ class SymlinkManager:
 
         for key, _ in self.db:
             rel_path = key.decode()
-            full_path = self.repo_path / rel_path
+            full_path = self.cwd / rel_path
             try:
                 full_path.lstat()
             except FileNotFoundError:
@@ -518,7 +572,7 @@ class SymlinkManager:
             True if symlink was added.
             False is symlink failed to be added.
         """
-        link_path = self.repo_path / rel_path
+        link_path = self.cwd / rel_path
 
         translated_path = None
 
@@ -553,13 +607,11 @@ class SymlinkManager:
         to_delete = []
 
         for rel_path in self.scan_for_untracked_symlinks():
-            full_path = self.repo_path / rel_path
+            full_path = self.cwd / rel_path
             to_delete.append(full_path)
 
         for path in to_delete:
-            # TODO: Test.
-            # os.remove(path)
-            print(path)
+            os.remove(path)
             deleted += 1
 
         return deleted
@@ -626,7 +678,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    with SymlinkManager(os.getcwd()) as manager:
+    with SymlinkManager() as manager:
         if args.command == "add":
             print(
                 f"Added symlink: {manager.add_symlink(args.target_path, args.link_path, args.force)}"
