@@ -8,9 +8,62 @@ from typing import Literal
 import pathspec
 import plyvel
 
-# REFACTOR: Duplicating
-# ~/.bookmarks/shared-scripts/InfoField__ChronoIndex/info_field_coonoIndex/info_field_consts.py
-CURRENT_CHRONO_INDEX_PATH = "/home/ds13/.bookmarks/ChronoIndex/Current"
+
+class ChronoIndexPaths:
+    root: Path
+    year: Path
+    current: Path
+
+
+class ChronoIndex:
+    # "global" is reserved as a keyword.
+    main: ChronoIndexPaths
+    local: ChronoIndexPaths
+
+
+def init_chrono_index(cwd: Path) -> ChronoIndex:
+    # REFACTOR: Change to class. Root should be just chrono_index.global or
+    # chrono_index.local
+    chrono_index: ChronoIndex = {
+        # REFACTOR: Duplicating
+        # ~/.bookmarks/shared-scripts/InfoField__ChronoIndex/info_field_coonoIndex/info_field_consts.py
+        "main": {
+            "root": "/home/ds13/.bookmarks/ChronoIndex",
+            "current": "/home/ds13/.bookmarks/ChronoIndex/Current",
+        },
+        "local": {
+            "root": cwd / ".ChronoIndex",
+        },
+    }
+
+    chrono_index['local']['root'].mkdir(exist_ok=True)
+
+    # TODO: Get current year
+    year = "2025"
+    chrono_index['local']['year'] = chrono_index['local']['root'] / year
+    chrono_index['local']['year'].mkdir(exist_ok=True)
+
+    chrono_index['local']['current'] = chrono_index['local']['root'] / "Current"
+
+    year_local_chrono_index = None
+    try:
+        year_local_chrono_index = os.readlink(chrono_index['local']['current'])
+    except FileNotFoundError:
+        os.symlink(
+            chrono_index['local']['year'],
+            chrono_index['local']['current'],
+            target_is_directory=True
+        )
+        return chrono_index
+
+    if year_local_chrono_index != chrono_index['local']['year']:
+        update_fs_symlink(
+            chrono_index['local']['current'],
+            chrono_index['local']['year'],
+            target_is_directory=True
+        )
+
+    return chrono_index
 
 
 def update_fs_symlink(link_path: str | Path, new_link_path: str | Path, **symlink_kwargs):
@@ -59,40 +112,13 @@ class SymlinkManager:
         self.db_path = db_path
         self.db = plyvel.DB(db_path, create_if_missing=True)
         self.current_os = platform.system().lower()
-        self.init_chrono_index()
+        self.chrono_index = init_chrono_index(self.cwd)
 
         # Load translation rules from config file if exists
         self.translation_rules = self._load_translation_rules()
         self.gitignore_spec = self._load_gitignore_spec()
 
-    def init_chrono_index(self):
-        self.local_chrono_index = self.cwd / ".ChronoIndex"
-        self.local_chrono_index.mkdir(exist_ok=True)
-
-        # TODO: Get current year
-        year = "2025"
-        self.year_local_chrono_index = self.local_chrono_index / year
-        self.year_local_chrono_index.mkdir(exist_ok=True)
-
-        self.current_local_chrono_index = self.local_chrono_index / "Current"
-
-        year_local_chrono_index = None
-        try:
-            year_local_chrono_index = os.readlink(self.current_local_chrono_index)
-        except FileNotFoundError:
-            os.symlink(
-                self.year_local_chrono_index,
-                self.current_local_chrono_index,
-                target_is_directory=True
-            )
-            return
-
-        if year_local_chrono_index != self.year_local_chrono_index:
-            update_fs_symlink(
-                self.current_local_chrono_index,
-                self.year_local_chrono_index,
-                target_is_directory=True
-            )
+    
 
     def _load_gitignore_spec(self):
         """Load .gitignore patterns from repository."""
