@@ -8,6 +8,8 @@ from typing import Literal
 import pathspec
 import plyvel
 
+from symlink_manager.date_utils import postfix_created_file_with_utc
+
 
 class ChronoIndexPaths:
     root: Path
@@ -117,8 +119,6 @@ class SymlinkManager:
         # Load translation rules from config file if exists
         self.translation_rules = self._load_translation_rules()
         self.gitignore_spec = self._load_gitignore_spec()
-
-    
 
     def _load_gitignore_spec(self):
         """Load .gitignore patterns from repository."""
@@ -590,6 +590,17 @@ class SymlinkManager:
 
         return {"added": added, "updated": updated, "deleted": deleted}
 
+    # TODO: Add hub.
+    def link(self, source: Path, target: Path):
+        """Transiently add link to local ChronoIndex and link it to the target location.
+
+        :param source: 
+        :param target: 
+        """
+        name_in_chrono_index = postfix_created_file_with_utc(self.chrono_index['local']['current'] / target.name)
+        os.link(source, name_in_chrono_index)
+        os.symlink(name_in_chrono_index, target)
+
     def add_tracked_symlink(self, rel_path):
         """
         Add a single symlink based on DB record.
@@ -611,7 +622,7 @@ class SymlinkManager:
         try:
             current_target = os.readlink(link_path)
         except FileNotFoundError:
-            os.symlink(translated_path, link_path)
+            self.link(translated_path, link_path)
             return True
 
         if current_target != translated_path:
