@@ -41,7 +41,7 @@ def init_chrono_index(cwd: Path) -> ChronoIndex:
     chrono_index['local']['root'].mkdir(exist_ok=True)
 
     # TODO: Get current year
-    year = "2025"
+    year = "2026"
     chrono_index['local']['year'] = chrono_index['local']['root'] / year
     chrono_index['local']['year'].mkdir(exist_ok=True)
 
